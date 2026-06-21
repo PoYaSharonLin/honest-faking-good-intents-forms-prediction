@@ -1,6 +1,6 @@
 # What People Say And How They Move: A Causal Reanalysis of Cursor-Based Faking-Good Detection in Online Personality Questionnaires
 
-## Overview
+## One-line project summary
 
 This is a **fork** of the original authors' repository. On top of all the original material, it adds a
 **causal re-analysis** of the original authors' data: it compares the **Faking-Good (FG)** and
@@ -29,6 +29,18 @@ The final report is in the repository **root** as a PDF file.
 
 ---
 
+## Data availability
+
+The dataset used in this re-analysis is included in this repository at
+[`Data/Prepared_datasets/clean_dataset_intermediate.xlsx`](Data/Prepared_datasets/clean_dataset_intermediate.xlsx)
+and is downloaded automatically by the `.Rmd`, so no separate data request is needed to reproduce the
+analysis. This data originates from the original authors' study; to request the original anonymized
+dataset, contact the original authors at delie.research([AT])gmail.com. See the
+[original repository](https://github.com/delieresearch/honest-faking-good-intents-forms-prediction) for
+full details on data collection.
+
+---
+
 ## Assignment self-check ✅
 
 A quick map from each assignment requirement to where it lives in this repo.
@@ -49,7 +61,12 @@ The `.Rmd` is **self-contained**: it downloads the dataset directly from this re
 ([`clean_dataset_intermediate.xlsx`](Data/Prepared_datasets/clean_dataset_intermediate.xlsx)), so you
 can knit it on its own without any manual data setup.
 
-1. **Install R** (RStudio is optional but convenient).
+1. **Install R** (RStudio is optional but convenient). The analysis was run on:
+   ```
+   R version 4.4.2 (2024-10-31 ucrt) -- "Pile of Leaves"
+   Copyright (C) 2024 The R Foundation for Statistical Computing
+   Platform: x86_64-w64-mingw32/x64
+   ```
 2. **Install the required packages:**
    ```r
    install.packages(c(
@@ -101,6 +118,15 @@ All numbers are rounded to **two decimal places**, with three exceptions:
    meaningful values.
 3. **Table 11 (doubly-robust robustness check)** — kept at higher precision so that small differences
    between estimators are not lost.
+
+---
+
+## Note on AI use
+
+In line with the course AI Use Policy, AI assistance (a large language model) was used as a support tool
+during this project — for example, to help draft and refine the analysis code, debug R code, and write
+and polish this README. All analytic decisions, the choice of methods, the interpretation of results, and
+the final report were made and reviewed by the author, who takes full responsibility for the content.
 
 ---
 
