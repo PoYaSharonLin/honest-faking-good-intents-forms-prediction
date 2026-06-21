@@ -1,14 +1,71 @@
-# User Modeling for Distinguishing Between Honest and Faking-Good Intents in Online Forms
+# What People Say And How They Move: A Causal Reanalysis of Cursor-Based Faking-Good Detection in Online Personality Questionnaires
 
 ## About
 
-This is the official repository for the research paper "User Modeling for Distinguishing Between Honest and Faking-Good Intents in Online Forms". Our research focuses on identifying lies in questionnaires consisting of Likert scale questions. The repository includes the processed version of the dataset gathered during the experiment that is used for training the machine learning model, along with the data processing pipeline and the model evaluation steps. The purpose of this repository is to enable other researchers to reproduce the data manipulation and model development processes. If you have any questions, you may contact the authors at the [contact information found below](#a-authors).
+**Note on this fork.** This is a fork of the original authors' repository. In addition to the original
+material, it adds a **[Reanalysis](#a-reanalysis)** folder that contains a causal re-analysis (IPTW /
+doubly-robust estimation) of the original authors' data, written as an R Markdown (`.Rmd`) file. See the [Reanalysis](#a-reanalysis) section for how to read it. The final report is in the root directory as PDF file.
 
-#### Table of Contents
+
+
+## <a name="a-reanalysis"> Reanalysis
+
+This fork adds a causal re-analysis of the original authors' data. It compares the **Faking-Good (FG)**
+and **Honest (H)** groups using inverse-probability-of-treatment weighting (IPTW) and doubly-robust
+estimators. The analysis lives in the [`Reanalysis Scripts`](Reanalysis%20Scripts) folder:
+
+- **[`FG_vs_Honest_data_analysis.Rmd`](Reanalysis%20Scripts/FG_vs_Honest_data_analysis.Rmd)** — the R Markdown source with all of the analysis code.
+
+The `.Rmd` downloads the data directly from this repository
+([`Data/Prepared_datasets/clean_dataset_intermediate.xlsx`](Data/Prepared_datasets/clean_dataset_intermediate.xlsx)),
+so it can be knitted on its own. It requires R with the following packages: `openxlsx2`, `readxl`,
+`dplyr`, `knitr`, `WeightIt`, `cobalt`, and `ggplot2` (plus `CBPS` and `gbm` for the optional
+alternative propensity-score specifications).
+
+### How to find the code behind any table or figure in the PDF
+
+**Every table and figure in the PDF can be found inside the `.Rmd` file.** To locate the code for any
+of them, copy the table or figure **caption/title** from the PDF and use **Ctrl + F** (find) in the
+`.Rmd` to jump to the matching code chunk. For example, searching for `Table 8: H2 secondary` or
+`Doubly-robust robustness check` will take you straight to the code that produces it.
+
+The PDF contains these tables and figures (all are reproducible from the `.Rmd`):
+
+| Item | What it shows |
+| --- | --- |
+| Table 4 | Pre-treatment covariate balance |
+| Table 5 | Covariate balance before and after IPTW |
+| Table 6 | H1 — IPTW-weighted ATE on the social-desirability composite |
+| Table 7 | H2 — IPTW-weighted ATEs on the two primary cursor outcomes |
+| Table 8 | H2 secondary (exploratory) cursor-feature family |
+| Table 9 | Positive responses for the three H3 moderator items and the combined indicator *M* |
+| Table 10 | H3 (exploratory) — IPTW-weighted moderation by employment adversity |
+| Table 11 | Doubly-robust robustness check |
+| Table 12 | Alternative propensity-score specifications |
+| Table 13 | Bootstrap inference |
+| Figure 3 | Covariate balance before and after IPTW (love plot + propensity-score / IPTW weight distributions) |
+| Figure 4 | Propensity score overlap before and after IPTW |
+
+### Number formatting in the `.Rmd`
+
+In the `.Rmd`, **all numbers are rounded to two decimal places**, with three exceptions:
+
+1. **p-values** — reported with more precision (three decimals) as is standard.
+2. **Table 8 (H2 secondary cursor-feature family)** — the original (unrounded) numbers are kept, because
+   the features are on very different scales and rounding to two decimals would hide meaningful values.
+3. **The robustness check (doubly-robust comparison, Table 11)** — kept at higher precision so that small
+   differences between estimators are not lost.
+
+---
+## Original  README
+
+
+### Table of Contents
 * [Paper Citation](#a-citation)
 * [Datasets](#a-datasets)
 * [Questionnaire Preview](#a-questionnaire)
 * [Scripts](#a-scripts)
+* [Reanalysis](#a-reanalysis)
 * [Authors](#a-authors)
 * [Licence](#a-licence)
 
@@ -104,6 +161,8 @@ Script for search of hyperparameters for Gradient Boosting.
 #### [9 - Hyperparameter tuning for Logistic Regression](Scripts/09_Hyperparameter_LR_v0.ipynb)
 
 Script for search of hyperparameters for Logistic Regression.
+
+
 
 ## <a name="a-authors"> Authors
   

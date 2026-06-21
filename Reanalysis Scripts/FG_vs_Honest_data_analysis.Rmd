@@ -1,0 +1,735 @@
+---
+title: "FG v.s. Honest: Balance and IPTW"
+author: "PoYaSharonlin"
+date: "`r Sys.Date()`"
+output: pdf_document
+---
+
+## Setup
+
+```{r setup, echo = TRUE, include = FALSE}
+# install.packages(c("openxlsx2", "dplyr", "knitr",
+#                    "WeightIt", "cobalt", "ggplot2"))
+
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE,
+                      fig.width = 7, fig.height = 4.5)
+library(openxlsx2)
+library(dplyr)
+library(knitr)
+library(WeightIt)
+library(cobalt)
+library(ggplot2)
+```
+
+## 4 Data and Methodology
+
+### 4.1 Data Source and Preparation
+
+```{r load}
+url <- "https://github.com/delieresearch/honest-faking-good-intents-forms-prediction/raw/main/Data/Prepared_datasets/clean_dataset_intermediate.xlsx"
+tmp <- tempfile(fileext = ".xlsx")
+download.file(url, tmp, mode = "wb")
+df  <- readxl::read_excel(tmp)
+# 112 rows
+```
+
+```{r recode, echo = TRUE}
+# use grepl to avoid unicode issue
+df <- df %>%
+  rename_with(~ dplyr::case_when(
+    grepl("^G03Q01", .) ~ "q01_attention_check_raw",
+    grepl("^G03Q02", .) ~ "q02_computer_skill_raw",
+    grepl("^G03Q03", .) ~ "q03_slovak_proficiency_raw",
+    grepl("^G03Q04", .) ~ "q04_english_proficiency_raw",
+    grepl("^G03Q05", .) ~ "q05_german_proficiency_raw",
+    grepl("^G03Q06", .) ~ "q06_marital_status_raw",
+    grepl("^G03Q07", .) ~ "q07_age_category_raw",
+    grepl("^G03Q08", .) ~ "q08_highest_education_raw",
+    grepl("^G03Q09", .) ~ "q09_employment_status_raw",
+    grepl("^G03Q10", .) ~ "q10_household_size_raw",
+    grepl("^G03Q11", .) ~ "q11_job_changes_times_raw",
+    grepl("^G03Q12", .) ~ "q12_sex_raw",
+    grepl("^G03Q13", .) ~ "q13_ever_fired_raw",
+    grepl("^G03Q14", .) ~ "q14_ever_long_term_unemployed_raw",
+    TRUE                ~ .
+  ))
+
+# ---- Code each covariate to its numeric scale -------------------------------
+likert_map <- c("Vôbec nesúhlasím" = 1, "Nesúhlasím" = 2,
+                "Neutrálne"        = 3, "Súhlasím"   = 4,
+                "Úplne súhlasím"   = 5)
+edu_map    <- c("Základné" = 1, "SŠ bez maturity" = 2,
+                "SŠ s maturitou" = 3, "VŠ 1. alebo 2. stupňa" = 4)
+emp_map    <- c("Nezamestnaný" = 0, "Študent" = 1,
+                "Skrátený úväzok" = 2, "Plný úväzok" = 3)
+jobchg_map <- c("0 (Nezmenil/a)" = 0, "1" = 1, "2" = 2, "3" = 3, "4+" = 4)
+
+df <- df %>%
+  mutate(
+    age        = as.numeric(q07_age_category_raw),
+    female     = as.integer(q12_sex_raw == "Žena"),
+    comp_skill = unname(likert_map[q02_computer_skill_raw]),
+    jobchg     = unname(jobchg_map[q11_job_changes_times_raw]),
+    edu        = unname(edu_map[q08_highest_education_raw]),
+    emp        = unname(emp_map[q09_employment_status_raw]),
+    group      = factor(ifelse(indicator_fg == 1, "FG", "H"),
+                        levels = c("H", "FG"))
+  )
+```
+
+### 4.5 Covariate Balance
+
+```{r balance-helpers}
+# ---- Compute one balance row ------------------------------------------------
+balance_row <- function(label, var) {
+  h  <- na.omit(df[[var]][df$group == "H"])
+  fg <- na.omit(df[[var]][df$group == "FG"])
+
+  pooled_sd <- sqrt((var(h) + var(fg)) / 2)
+  smd       <- (mean(fg) - mean(h)) / pooled_sd
+  tt        <- t.test(fg, h, var.equal = FALSE)
+  ks        <- suppressWarnings(ks.test(h, fg))
+
+  data.frame(
+    Covariate = label,
+    Honest    = sprintf("%.2f (%.2f)", mean(h),  sd(h)),
+    FG        = sprintf("%.2f (%.2f)", mean(fg), sd(fg)),
+    SMD       = sprintf("$%+.2f$", smd),
+    p_t       = sub("^0", "", sprintf("%.3f", tt$p.value)),
+    p_ks      = sub("^0", "", sprintf("%.3f", ks$p.value)),
+    stringsAsFactors = FALSE
+  )
+}
+
+covariates <- c(
+  "Age (years)"                   = "age",
+  "Female (proportion)"           = "female",
+  "Computer skill (1--5)"         = "comp_skill",
+  "Cumulative job changes (0--4)" = "jobchg",
+  "Education (1--4)"              = "edu",
+  "Employment status (0--3)"      = "emp"
+)
+
+tab  <- do.call(rbind, Map(balance_row, names(covariates), covariates))
+n_h  <- sum(df$group == "H")
+n_fg <- sum(df$group == "FG")
+```
+
+
+**Table 4: Pre-treatment covariate balance.**
+```{r balance-table, results = "asis"}
+kable(
+  tab[, c("Covariate", "Honest", "FG", "SMD", "p_t")],
+  format    = "pipe",
+  booktabs  = TRUE,
+  escape    = FALSE,
+  align     = "lcccc",
+  col.names = c("Covariate",
+                sprintf("Honest ($n=%d$)", n_h),
+                sprintf("Faking-Good ($n=%d$)", n_fg),
+                "SMD", "$p$"),
+  caption   = paste("Pre-treatment covariate balance.",
+                    "SMD = standardized mean difference (FG $-$ H) / pooled SD;",
+                    "positive SMD indicates FG higher.",
+                    "$p$-values from Welch's $t$-test.",
+                    "\\label{tab:balance}")
+)
+```
+
+```{r ks-table, results = "asis"}
+kable(
+  tab[, c("Covariate", "p_ks")],
+  format    = "pipe",
+  booktabs  = TRUE,
+  escape    = FALSE,
+  align     = "lc",
+  col.names = c("Covariate", "KS $p$"),
+  caption   = "Kolmogorov–Smirnov two-sample test comparing the full distribution of each covariate between groups (H vs.\\ FG)."
+)
+```
+
+### 4.6 Inverse-Probability-of-Treatment-Weighted Estimators
+
+```{r iptw-fit, echo = TRUE}
+# Build the analysis frame: outcome indicator + 6 pre-treatment covariates
+df_w <- df %>%
+  select(indicator_fg, age, female, comp_skill, jobchg, edu, emp) %>%
+  na.omit()
+
+# Fit the propensity score and compute stabilized IPTW weights for the ATE
+w_out <- weightit(
+  indicator_fg ~ age + female + comp_skill + jobchg + edu + emp,
+  data      = df_w,
+  method    = "glm",       # logistic-regression propensity score
+  estimand  = "ATE",
+  stabilize = TRUE
+)
+
+w_out
+```
+
+```{r iptw-diagnostics, echo = TRUE}
+# Effective sample size by arm
+ess <- function(w) sum(w)^2 / sum(w^2)
+ess_tab <- data.frame(
+  Group = c("Honest (H)", "Faking-Good (FG)"),
+  N     = c(sum(df_w$indicator_fg == 0),
+            sum(df_w$indicator_fg == 1)),
+  ESS   = c(ess(w_out$weights[df_w$indicator_fg == 0]),
+            ess(w_out$weights[df_w$indicator_fg == 1]))
+)
+ess_tab$ESS <- sprintf("%.1f", ess_tab$ESS)
+
+kable(ess_tab,
+      caption = "Effective sample size (ESS) after IPTW weighting.",
+      align   = "lcc")
+```
+
+
+```{r weight-dist, fig.cap = "Distribution of stabilized IPTW weights by treatment arm. Extreme weights would indicate influential observations and potential instability of the weighted estimator.", fig.height = 3.5}
+weight_df <- data.frame(
+  weight = w_out$weights,
+  group  = factor(ifelse(df_w$indicator_fg == 1, "Faking-Good", "Honest"),
+                  levels = c("Honest", "Faking-Good"))
+)
+
+ggplot(weight_df, aes(x = group, y = weight, fill = group)) +
+  geom_boxplot(alpha = 0.6, width = 0.5, outlier.size = 1.2) +
+  geom_jitter(width = 0.12, alpha = 0.4, size = 1) +
+  scale_fill_manual(values = c("Honest" = "#0072B2",
+                               "Faking-Good" = "#E69F00")) +
+  labs(x = NULL, y = "Stabilized IPTW weight") +
+  theme_minimal(base_size = 11) +
+  theme(legend.position = "none",
+        panel.grid.major.x = element_blank())
+```
+
+**Figure 3: Covariate balance before and after IPTW.**
+**(b) Distributions of the propensity score and the stabilized IPTW weights by condition.**
+
+```{r comparison, echo = TRUE}
+diag_long <- data.frame(
+  value = c(w_out$ps, w_out$weights),
+  group = rep(factor(ifelse(df_w$indicator_fg == 1, "Faking-Good", "Honest"),
+                     levels = c("Honest", "Faking-Good")), times = 2),
+  type  = factor(rep(c("Propensity score", "IPTW (stabilized) weight"),
+                     each = nrow(df_w)),
+                 levels = c("Propensity score", "IPTW (stabilized) weight"))
+)
+
+ggplot(diag_long, aes(x = group, y = value, fill = group)) +
+  geom_boxplot(alpha = 0.6, width = 0.5, outlier.size = 1.2) +
+  geom_jitter(width = 0.12, alpha = 0.4, size = 1) +
+  facet_wrap(~ type, scales = "fixed") +
+  scale_y_continuous(limits = c(0, 2)) +
+  scale_fill_manual(values = c("Honest"      = "#0072B2",
+                               "Faking-Good" = "#E69F00")) +
+  labs(x = NULL, y = NULL) +
+  theme_minimal(base_size = 11) +
+  theme(legend.position    = "none",
+        panel.grid.major.x = element_blank(),
+        strip.text         = element_text(face = "bold"))
+```
+**Figure 3: Covariate balance before and after IPTW.**
+**(a) Love plot of standardized mean differences (SMDs) before and after IPTW.**
+```{r love-plot, fig.cap = "\\label{fig:love}Covariate balance before and after IPTW. Points show standardized mean differences for each covariate; the dashed line marks the conventional threshold $|\\mathrm{SMD}| = 0.1$. Weighting removes the imbalance on Female, Computer skill, and Age while preserving balance on the remaining covariates.", fig.height = 4}
+var_labels <- c(
+  age        = "Age (years)",
+  female     = "Female (proportion)",
+  comp_skill = "Computer skill (1-5)",
+  jobchg     = "Job changes (0-4)",
+  edu        = "Education (1-4)",
+  emp        = "Employment status (0-3)"
+)
+
+love.plot(
+  w_out,
+  binary       = "std",        # standardized diff for binary vars too
+  abs          = FALSE,        # show signed SMD
+  thresholds   = c(m = 0.1),
+  var.order    = "unadjusted", # sort by pre-weighting imbalance
+  var.names    = var_labels,
+  sample.names = c("Unweighted", "IPTW"),
+  colors       = c("red", "darkgreen"),
+  shapes       = c("triangle filled", "circle filled"),
+  size         = 3,
+  title        = NULL,
+  position     = "bottom"
+) +
+  theme_minimal(base_size = 11) +
+  theme(legend.position = "bottom",
+        legend.title    = element_blank(),
+        panel.grid.minor = element_blank())
+```
+
+**Table 5: Covariate balance before and after IPTW.**
+```{r bal-tab-iptw, results = "asis"}
+# Weighted balance table: SMDs and KS statistics, before and after IPTW
+bt <- bal.tab(w_out,
+              un         = TRUE,
+              stats      = c("mean.diffs", "ks.statistics"),
+              thresholds = c(m = 0.1, ks = 0.1),
+              binary     = "std")
+
+# Pull the per-covariate table and tidy it for printing
+bt_df <- bt$Balance
+
+# Put the six covariates first and the propensity score last; label prop.score
+row_labels <- c(var_labels, prop.score = "Propensity score")
+ord        <- c(setdiff(rownames(bt_df), "prop.score"),
+                intersect("prop.score", rownames(bt_df)))
+bt_df      <- bt_df[ord, ]
+
+bt_df$Covariate <- row_labels[rownames(bt_df)]
+bt_df <- bt_df[, c("Covariate",
+                   "Diff.Un",  "Diff.Adj",
+                   "KS.Un",    "KS.Adj")]
+bt_df[, 2:5] <- lapply(bt_df[, 2:5],
+                      function(x) sprintf("%+.2f", as.numeric(x)))
+
+kable(bt_df,
+      col.names = c("Covariate",
+                    "SMD (Unweighted)", "SMD (IPTW)",
+                    "KS (Unweighted)",  "KS (IPTW)"),
+      align     = "lcccc",
+      caption   = paste("Covariate balance before and after IPTW.",
+                        "SMD = standardized mean difference;",
+                        "KS = Kolmogorov-Smirnov statistic.",
+                        "Conventional threshold for adequate balance is",
+                        "$|\\mathrm{SMD}| < 0.1$ and KS $< 0.1$.",
+                        "\\label{tab:bal-iptw}"))
+```
+
+**Figure 4: Propensity score overlap before and after IPTW**
+
+```{r ps-overlap, fig.cap = "\\label{fig:psoverlap}Distribution of estimated propensity scores by treatment arm before and after IPTW. Substantial overlap supports the positivity assumption required for IPTW.", fig.height = 3.5}
+arm_colors <- c("#0072B2", "#E69F00")        # Honest, Faking-Good (Okabe-Ito)
+arm_labels <- c("Honest", "Faking-Good")
+
+bal.plot(
+  w_out,
+  var.name     = "prop.score",
+  which        = "both",
+  type         = "density",
+  sample.names = c("Unweighted", "IPTW"),    # match love plot wording
+  colors       = arm_colors
+) +
+  scale_fill_manual(values = arm_colors, labels = arm_labels, name = NULL) +
+  scale_color_manual(values = arm_colors, labels = arm_labels, name = NULL) +
+  labs(x = "Propensity score", y = "Density", title = NULL) +
+  theme_minimal(base_size = 11) +
+  theme(
+    legend.position  = "bottom",
+    legend.title     = element_blank(),
+    panel.grid.minor = element_blank(),
+    strip.text       = element_text(face = "bold")
+  )
+```
+
+### 4.7 Measures
+
+```{r outcomes, echo = TRUE}
+# Attach the IPTW weights (row-aligned: 112 complete cases, same order as df)
+df$w <- w_out$weights
+
+df <- df %>%
+  mutate(
+    ## ---- H1: social-desirability self-report outcome --------------------
+    # BFI-2 domains present: E, A, C, N (no Open-Mindedness in this dataset).
+    # Negative Emotionality reverse-scored (1-5 scale) so all four trait
+    # scores increase with social desirability; SD_i is their mean.
+    n_rev = 6 - mean_bfi2_n,
+    SD    = rowMeans(cbind(mean_bfi2_e, mean_bfi2_a, mean_bfi2_c, n_rev)),
+
+    ## ---- H2: two primary trajectory-level cursor outcomes ----------------
+    # Deviation: average actual-to-shortest path discrepancy on the BFI task.
+    #            (alternative operationalization: big5_mean_max_deviation)
+    Deviation = big5_mean_real_ideal_trajectory_diff,
+    # Speed: average movement speed (distance / elapsed time).
+    Speed     = big5_mean_velocity,
+    # 
+
+    ## ---- H3: employment-adversity moderator ------------------------------
+    fired_bin  = as.integer(q13_ever_fired_raw == "\u00C1no"),               # "Ano" = yes
+    ltunemp_bin = as.integer(q14_ever_long_term_unemployed_raw == "\u00C1no"),
+    curr_unemp_bin = as.integer(emp == 0),
+    M = as.integer(fired_bin == 1 | ltunemp_bin == 1 | curr_unemp_bin == 1)
+  )
+
+# Pre-specified secondary (exploratory) cursor family for H2 (BH-FDR),
+# excluding the two primary outcomes to keep the families disjoint.
+secondary_features <- c(
+  "big5_mean_init_time", "big5_mean_react_time", "big5_mean_auc_diff",
+  "big5_mean_max_deviation", "big5_mean_x_flips", "big5_mean_y_flips",
+  "big5_mean_x_axis_vel", "big5_mean_y_axis_vel",
+  "big5_mean_acc", "big5_mean_x_axis_acc", "big5_mean_y_axis_acc"
+)
+```
+
+## 5 Results
+
+### 5.1 Estimation and Power
+
+```{r ate-helper, echo = TRUE}
+# Weighted ATE with Huber-White (HC3) robust SE.
+# alt = "greater"/"less" for directional hypotheses, else two-sided.
+wate <- function(outcome, data = df, treat = "indicator_fg",
+                 alt = "two.sided", label = outcome) {
+  d   <- data[!is.na(data[[outcome]]) & !is.na(data$w), ]
+  fit <- lm(as.formula(paste(outcome, "~", treat)), data = d, weights = d$w)
+  ct  <- lmtest::coeftest(fit, vcov. = sandwich::vcovHC(fit, type = "HC3"))
+  est <- ct[treat, "Estimate"]; se <- ct[treat, "Std. Error"]
+  z   <- est / se
+  p   <- switch(alt,
+                greater   = pnorm(z, lower.tail = FALSE),
+                less      = pnorm(z, lower.tail = TRUE),
+                two.sided = 2 * pnorm(abs(z), lower.tail = FALSE))
+  ci  <- est + c(-1, 1) * qnorm(0.975) * se
+  data.frame(Outcome = label, ATE = est, SE = se,
+             CI_low = ci[1], CI_high = ci[2], z = z, p = p,
+             row.names = NULL)
+}
+```
+
+### 5.2 H1 Result: Social Desirability
+**Table 6: H1: IPTW-weighted ATE of the FG instruction on the social-desirability**
+```{r h1, echo = TRUE, results = "asis"}
+h1 <- wate("SD", alt = "greater", label = "Social desirability (SD)")
+
+h1_out <- transform(h1,
+  ATE = sprintf("%+.2f", ATE), SE = sprintf("%.2f", SE),
+  CI  = sprintf("[%+.2f, %+.2f]", CI_low, CI_high),
+  z   = sprintf("%.2f", z),
+  p   = sub("^0", "", sprintf("%.3f", p)))
+kable(h1_out[, c("Outcome", "ATE", "SE", "CI", "z", "p")],
+      align = "lccccc", escape = FALSE,
+      col.names = c("Outcome", "ATE", "SE", "95\\% CI", "$z$",
+                    "$p$ (one-sided)"),
+      caption = paste("H1: IPTW-weighted ATE on the social-desirability",
+                      "composite. Directional prediction $\\mathrm{ATE} > 0$."))
+```
+
+### 5.3 H2 Result: Cursor Outcomes
+**Table 7: H2: IPTW-weighted ATEs on the two primary cursor outcomes.**
+```{r h2-primary, echo = TRUE, results = "asis"}
+# Primary directional predictions: Deviation > 0 (H2a), Speed < 0 (H2b)
+h2 <- rbind(
+  wate("Deviation", alt = "greater", label = "Trajectory deviation (H2a)"),
+  wate("Speed",     alt = "less",    label = "Movement speed (H2b)")
+)
+# Holm adjustment across the two pre-specified primary tests
+h2$p_holm <- p.adjust(h2$p, method = "holm")
+
+h2_out <- transform(h2,
+  ATE    = sprintf("%+.2f", ATE), SE = sprintf("%.2f", SE),
+  CI     = sprintf("[%+.2f, %+.2f]", CI_low, CI_high),
+  z      = sprintf("%.2f", z),
+  p      = sub("^0", "", sprintf("%.3f", p)),
+  p_holm = sub("^0", "", sprintf("%.3f", p_holm)))
+kable(h2_out[, c("Outcome", "ATE", "SE", "CI", "z", "p", "p_holm")],
+      align = "lcccccc", escape = FALSE,
+      col.names = c("Outcome", "ATE", "SE", "95\\% CI", "$z$",
+                    "$p$ (1-sided)", "$p_{\\text{Holm}}$"),
+      caption = paste("H2: IPTW-weighted ATEs on the two primary cursor",
+                      "outcomes, with directional one-sided tests and",
+                      "Holm adjustment across the primary family."))
+```
+
+## Appendix A --- H2 Secondary Cursor-Feature Family
+**Table 8: H2 secondary (exploratory) cursor-feature family**
+```{r h2-secondary, echo = TRUE, results = "asis"}
+# Secondary exploratory family: two-sided ATEs with Benjamini-Hochberg FDR
+h2s <- do.call(rbind, lapply(secondary_features,
+                             function(v) wate(v, alt = "two.sided")))
+h2s$p_bh <- p.adjust(h2s$p, method = "BH")
+h2s <- h2s[order(h2s$p_bh), ]
+
+h2s_out <- transform(h2s,
+  Feature = sub("^big5_mean_", "", Outcome),
+  ATE  = sprintf("%+.3g", ATE), SE = sprintf("%.3g", SE),
+  z    = sprintf("%.2f", z),
+  p    = sub("^0", "", sprintf("%.3f", p)),
+  p_bh = sub("^0", "", sprintf("%.3f", p_bh)))
+kable(h2s_out[, c("Feature", "ATE", "SE", "z", "p", "p_bh")],
+      align = "lccccc", escape = FALSE,
+      col.names = c("Feature", "ATE", "SE", "$z$", "$p$",
+                    "$p_{\\text{BH}}$"),
+      caption = paste("H2 secondary (exploratory) cursor-feature family.",
+                      "Two-sided IPTW-weighted ATEs with Benjamini--Hochberg",
+                      "FDR adjustment; treated as exploratory, not",
+                      "confirmatory."))
+```
+
+## Appendix B --- H3 Exploratory Moderation Analysis
+
+### B.2 Moderator Construction
+**Table 9: Positive responses for the three H3 moderator items and the combined indicator M , by treatment arm**
+```{r moderator-cells, echo = TRUE, results = "asis"}
+# Realized moderator counts (reconcile against the Measures section text)
+mod_tab <- data.frame(
+  Item = c("Ever long-term unemployed", "Ever fired", "Current unemployed",
+           "Combined moderator $M$"),
+  H  = c(sum(df$ltunemp_bin[df$group == "H"]),
+         sum(df$fired_bin[df$group == "H"]),
+         sum(df$curr_unemp_bin[df$group == "H"]),
+         sum(df$M[df$group == "H"])),
+  FG = c(sum(df$ltunemp_bin[df$group == "FG"]),
+         sum(df$fired_bin[df$group == "FG"]),
+         sum(df$curr_unemp_bin[df$group == "FG"]),
+         sum(df$M[df$group == "FG"])),
+  Total = c(sum(df$ltunemp_bin), sum(df$fired_bin), sum(df$curr_unemp_bin), sum(df$M))
+)
+kable(mod_tab, escape = FALSE, align = "lccc",
+      caption = "Positive responses for the H3 moderator items by arm.")
+```
+
+### B.3 Moderation Results
+**Table 10: H3 (exploratory): IPTW-weighted moderation by employment adversity.**
+```{r h3, echo = TRUE, results = "asis"}
+# Moderation: interaction T x M in a weighted model. The interaction
+# coefficient is Delta_Y = ATE(M=1) - ATE(M=0). Two-sided (H3: Delta_Y != 0).
+h3_one <- function(outcome, label) {
+  d   <- df[!is.na(df[[outcome]]) & !is.na(df$w), ]
+  fit <- lm(as.formula(paste(outcome, "~ indicator_fg * M")),
+            data = d, weights = d$w)
+  ct  <- lmtest::coeftest(fit, vcov. = sandwich::vcovHC(fit, type = "HC3"))
+  trm <- "indicator_fg:M"
+  est <- ct[trm, "Estimate"]; se <- ct[trm, "Std. Error"]
+  z   <- est / se; p <- 2 * pnorm(abs(z), lower.tail = FALSE)
+  data.frame(Outcome = label, Delta = est, SE = se, z = z, p = p,
+             row.names = NULL)
+}
+h3 <- rbind(
+  h3_one("SD",        "Social desirability"),
+  h3_one("Deviation", "Trajectory deviation"),
+  h3_one("Speed",     "Movement speed")
+)
+
+h3_out <- transform(h3,
+  Delta = sprintf("%+.2f", Delta), SE = sprintf("%.2f", SE),
+  z = sprintf("%.2f", z), p = sub("^0", "", sprintf("%.3f", p)))
+kable(h3_out[, c("Outcome", "Delta", "SE", "z", "p")],
+      align = "lcccc", escape = FALSE,
+      col.names = c("Outcome", "$\\Delta_Y$", "SE", "$z$", "$p$"),
+      caption = paste("H3 (exploratory): IPTW-weighted moderation by",
+                      "employment adversity. $\\Delta_Y$ is the",
+                      "treatment $\\times$ moderator interaction; the",
+                      "smallest subgroup cell is small, so nulls are not",
+                      "interpreted substantively."))
+```
+
+## Appendix C --- Doubly-Robust Alternatives
+
+```{r dr-helpers, echo = TRUE}
+# (a) Covariate-adjusted IPTW: doubly robust via the outcome side of wate().
+wate_dr <- function(outcome, data = df, treat = "indicator_fg",
+                    covs = c("age","female","comp_skill","jobchg","edu","emp"),
+                    alt = "two.sided", label = outcome) {
+  d   <- data[!is.na(data[[outcome]]) & !is.na(data$w), ]
+  f   <- reformulate(c(treat, covs), response = outcome)
+  fit <- lm(f, data = d, weights = d$w)
+  ct  <- lmtest::coeftest(fit, vcov. = sandwich::vcovHC(fit, type = "HC3"))
+  est <- ct[treat, "Estimate"]; se <- ct[treat, "Std. Error"]
+  z   <- est / se
+  p   <- switch(alt,
+                greater   = pnorm(z, lower.tail = FALSE),
+                less      = pnorm(z, lower.tail = TRUE),
+                two.sided = 2 * pnorm(abs(z), lower.tail = FALSE))
+  ci  <- est + c(-1, 1) * qnorm(0.975) * se
+  data.frame(Outcome = label, Method = "DR (cov-adj IPTW)",
+             ATE = est, SE = se, CI_low = ci[1], CI_high = ci[2],
+             z = z, p = p, row.names = NULL)
+}
+
+# (b) Canonical AIPW with influence-function SE (parametric nuisance models).
+aipw_ate <- function(outcome, data = df, treat = "indicator_fg",
+                     covs = c("age","female","comp_skill","jobchg","edu","emp"),
+                     alt = "two.sided", label = outcome) {
+  d <- data[stats::complete.cases(data[, c(covs, treat, outcome)]), ]
+  A <- d[[treat]]; Y <- d[[outcome]]; n <- nrow(d)
+
+  # Propensity score (light trimming to stabilise the inverse weights)
+  ps_fit <- glm(reformulate(covs, response = treat),
+                data = d, family = binomial())
+  e <- pmin(pmax(predict(ps_fit, type = "response"), 0.01), 0.99)
+
+  # Arm-specific outcome models
+  m1 <- predict(lm(reformulate(covs, response = outcome), data = d[A == 1, ]),
+                newdata = d)
+  m0 <- predict(lm(reformulate(covs, response = outcome), data = d[A == 0, ]),
+                newdata = d)
+
+  # AIPW influence function and ATE
+  psi <- (m1 - m0) + A / e * (Y - m1) - (1 - A) / (1 - e) * (Y - m0)
+  est <- mean(psi); se <- sd(psi) / sqrt(n); z <- est / se
+  p   <- switch(alt,
+                greater   = pnorm(z, lower.tail = FALSE),
+                less      = pnorm(z, lower.tail = TRUE),
+                two.sided = 2 * pnorm(abs(z), lower.tail = FALSE))
+  ci  <- est + c(-1, 1) * qnorm(0.975) * se
+  data.frame(Outcome = label, Method = "AIPW",
+             ATE = est, SE = se, CI_low = ci[1], CI_high = ci[2],
+             z = z, p = p, row.names = NULL)
+}
+```
+
+**Table 11: Doubly-robust robustness check**
+```{r dr-compare, echo = TRUE, results = "asis"}
+# Stack IPTW (Section 9 helper), DR, and AIPW for each primary outcome.
+fmt_cols <- c("Outcome", "Method", "ATE", "SE", "CI_low", "CI_high", "z", "p")
+dr_compare <- function(outcome, alt, label) {
+  a  <- transform(wate(outcome, alt = alt, label = label), Method = "IPTW")
+  b  <- wate_dr(outcome, alt = alt, label = label)
+  cc <- aipw_ate(outcome, alt = alt, label = label)
+  rbind(a[fmt_cols], b[fmt_cols], cc[fmt_cols])
+}
+
+dr_tab <- rbind(
+  dr_compare("SD",        "greater", "Social desirability (H1)"),
+  dr_compare("Deviation", "greater", "Trajectory deviation (H2a)"),
+  dr_compare("Speed",     "less",    "Movement speed (H2b)")
+)
+
+dr_out <- transform(dr_tab,
+  ATE = sprintf("%+.3f", ATE), SE = sprintf("%.3f", SE),
+  CI  = sprintf("[%+.3f, %+.3f]", CI_low, CI_high),
+  z   = sprintf("%.2f", z),
+  p   = sub("^0", "", sprintf("%.3f", p)))
+
+kable(dr_out[, c("Outcome", "Method", "ATE", "SE", "CI", "z", "p")],
+      align = "llccccc", escape = FALSE,
+      col.names = c("Outcome", "Estimator", "ATE", "SE", "95\\% CI",
+                    "$z$", "$p$"),
+      caption = paste("Doubly-robust robustness check. IPTW (propensity-score",
+                      "weighting only), DR (covariate-adjusted IPTW), and AIPW",
+                      "(augmented, influence-function SE) for the three primary",
+                      "outcomes. Directional tests: H1 and H2a one-sided",
+                      "$>0$, H2b one-sided $<0$. \\label{tab:dr}"))
+```
+
+
+
+## Appendix D --- Alternative Propensity-Score Specifications
+**Table 12: Alternative propensity-score specifications**
+```{r altps, echo = TRUE, results = "asis"}
+# Requires (for the alternatives): install.packages(c("CBPS", "gbm"))
+# ebal is provided internally by WeightIt. Missing back-end packages degrade
+# gracefully to "n/a" rather than breaking the knit.
+get_w <- function(method) {
+  out <- tryCatch(
+    weightit(indicator_fg ~ age + female + comp_skill + jobchg + edu + emp,
+             data = df_w, method = method, estimand = "ATE"),
+    error = function(e) NULL)
+  if (is.null(out)) rep(NA_real_, nrow(df_w)) else out$weights
+}
+
+# Weighted ATE [95% CI] for a given weight vector, row-aligned with df.
+wate_w <- function(outcome, wvec, alt) {
+  keep <- !is.na(df[[outcome]]) & !is.na(wvec)
+  if (sum(keep) == 0 || all(is.na(wvec))) return("n/a (pkg missing)")
+  dd <- data.frame(
+    y       = df[[outcome]][keep],
+    fg      = df$indicator_fg[keep],
+    wt_iptw = wvec[keep]
+  )
+  fit <- lm(y ~ fg, data = dd, weights = wt_iptw)
+  ct  <- lmtest::coeftest(fit, vcov. = sandwich::vcovHC(fit, type = "HC3"))
+  est <- ct["fg", "Estimate"]; se <- ct["fg", "Std. Error"]
+  ci  <- est + c(-1, 1) * qnorm(0.975) * se
+  sprintf("%+.3f [%+.3f, %+.3f]", est, ci[1], ci[2])
+}
+
+ps_weight_list <- list(
+  "Logistic GLM (main)" = w_out$weights,
+  "CBPS"                = get_w("cbps"),
+  "Entropy balancing"   = get_w("ebal"),
+  "GBM"                 = get_w("gbm")
+)
+
+altps_tab <- do.call(rbind, lapply(names(ps_weight_list), function(nm) {
+  wv <- ps_weight_list[[nm]]
+  data.frame(
+    PS        = nm,
+    SD        = wate_w("SD",        wv, "greater"),
+    Deviation = wate_w("Deviation", wv, "greater"),
+    Speed     = wate_w("Speed",     wv, "less"),
+    stringsAsFactors = FALSE
+  )
+}))
+
+kable(altps_tab, align = "lccc", escape = FALSE,
+      col.names = c("PS method", "H1: SD", "H2a: Deviation", "H2b: Speed"),
+      caption = paste("Alternative propensity-score specifications.",
+                      "Cells are IPTW-weighted ATE with 95\\% CI; weights from",
+                      "logistic GLM (main), CBPS, entropy balancing, and GBM.",
+                      "\\label{tab:altps}"))
+```
+
+## Appendix E --- Bootstrap Inference
+
+```{r bootstrap, echo = TRUE, cache = TRUE}
+boot_all <- function(B = 2000, seed = 2026) {
+  set.seed(seed)
+  one_rep <- function() {
+    idx <- sample.int(nrow(df), replace = TRUE)
+    db  <- df[idx, ]
+    wb  <- tryCatch(
+      weightit(indicator_fg ~ age + female + comp_skill + jobchg + edu + emp,
+               data = db, method = "glm", estimand = "ATE",
+               stabilize = TRUE)$weights,
+      error = function(e) NULL)
+    if (is.null(wb)) return(c(SD = NA_real_, Deviation = NA_real_, Speed = NA_real_))
+    slope <- function(y) {
+      ok <- !is.na(db[[y]])
+      # unname(): coef()[2] carries the term name; without stripping it, c()
+      # would build column names like "SD.db$indicator_fg[ok]" and the
+      # boot_mat[, "SD"] lookup below would fail with "subscript out of bounds".
+      tryCatch(unname(coef(lm(db[[y]][ok] ~ db$indicator_fg[ok],
+                              weights = wb[ok]))[2]),
+               error = function(e) NA_real_)
+    }
+    c(SD = slope("SD"), Deviation = slope("Deviation"), Speed = slope("Speed"))
+  }
+  t(replicate(B, one_rep()))            # B x 3 matrix
+}
+
+boot_mat <- boot_all(B = 2000)
+colnames(boot_mat) <- c("SD", "Deviation", "Speed")   # guarantee column names
+```
+
+**Table 13: Bootstrap inference**
+```{r boot-table, echo = TRUE, results = "asis"}
+# HC3 results (Section 9 helper) for side-by-side comparison
+hc3 <- list(SD        = wate("SD",        alt = "greater"),
+            Deviation = wate("Deviation", alt = "greater"),
+            Speed     = wate("Speed",     alt = "less"))
+
+boot_row <- function(col, label) {
+  v <- boot_mat[, col]; v <- v[is.finite(v)]
+  h <- hc3[[col]]
+  data.frame(
+    Outcome  = label,
+    ATE      = sprintf("%+.3f", h$ATE),
+    HC3_CI   = sprintf("[%+.3f, %+.3f]", h$CI_low, h$CI_high),
+    Boot_SE  = sprintf("%.3f", sd(v)),
+    Boot_CI  = sprintf("[%+.3f, %+.3f]",
+                       quantile(v, .025), quantile(v, .975)),
+    n_rep    = length(v),
+    stringsAsFactors = FALSE
+  )
+}
+
+boot_tab <- rbind(
+  boot_row("SD",        "Social desirability (H1)"),
+  boot_row("Deviation", "Trajectory deviation (H2a)"),
+  boot_row("Speed",     "Movement speed (H2b)")
+)
+
+kable(boot_tab, align = "lccccc", escape = FALSE,
+      col.names = c("Outcome", "ATE", "HC3 95\\% CI", "Boot SE",
+                    "Boot 95\\% CI", "$B$"),
+      caption = paste("Bootstrap inference (pairs bootstrap with",
+                      "propensity-score re-estimation in each resample).",
+                      "HC3 analytic CI shown alongside the bootstrap",
+                      "percentile CI. \\label{tab:boot}"))
+```
